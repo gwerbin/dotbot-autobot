@@ -2,34 +2,16 @@
 
 """
 Automatically update your Dotbot config file when new files are committed in Git
-
-The MIT License (MIT)
-Copyright (c) 2016 Greg Werbin
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-of the Software, and to permit persons to whom the Software is furnished to do
-so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 """
 
 import os
 import operator as op
+import sys
 from functools import partial
 from io import StringIO
-from itertools import chain
+from itertools import chain, filterfalse
+from operator import methodcaller
+from pathlib import Path
 from shutil import copy2 as cp
 
 import yaml
@@ -42,26 +24,41 @@ stream_handler = logging.StreamHandler()
 if not logger.hasHandlers():
     logger.addHandler(stream_handler)
 
-
+tmap = lambda f, *x: tuple(map(f, *x))
+filterbool = partial(filter, bool)
 expand_path = lambda s: os.path.abspath(os.path.expanduser(s))
+mapmethod = lambda m, *x: map(methodcaller(m), *x)
+dir_contains = lambda d, f: f.startswith(str(d)) or d.match(f)
 
-def file_in_any(filename, directories):
-    return any(map(filename.startswith, directories))
+def any_dir_contains(directories, filename):
+    return any(dir_contains(d, filename) for d in directories)
 
-def get_added_files(repo, directories):
+def get_added_files(repo, includes, excludes):
     """
     Get new files staged for commit
     """
-    directories = tuple(tmap(expand_path, directories))
+    # remove any empty files, and expand to Path objects
+    includes = [Path(expand_path(p)) for p in includes if p]
+    logger.debug("Checking %s", list(map(str, includes)))
+
+    excludes = [Path(expand_path(p)) for p in excludes if p]
+    logger.debug("Excluding %s", list(map(str, excludes)))
+
     diff = repo.diff('HEAD', cached=True)
     patch = PatchSet(StringIO(diff.patch))
-    logger.debug("Current patch:\n%s", str(diff.patch))
-    logger.debug("Checking %s", directories)
-    added_files = [f.path for f in patch.added_files]
-    logger.debug("All added files: %s", added_files)
-    return [f for f in added_files if file_in_any(expand_path(f), directories)]
+    logger.debug("\nCurrent patch:\n%s", str(diff.patch))
 
-def update_dotbot_conf(config_file, added_files):
+    added_files = [f.path for f in patch.added_files]
+    logger.debug("Added files, before filtering: %s", added_files)
+    def keep(f):
+        f = expand_path(f)
+        return any_dir_contains(includes, f) and not any_dir_contains(excludes, f)
+    added_files = list(filter(keep, added_files))
+    logger.debug("Added files, after filtering: %s", added_files)
+
+    return added_files
+
+def update_dotbot_conf(config_file, added_files, remove_backup):
     """
     Assumes you want to link all files into '~' and prepend a dot to the name
     e.g. for a new file "bashrc" it will generate:
@@ -74,7 +71,7 @@ def update_dotbot_conf(config_file, added_files):
     backup_file = config_file + ".bak"
     i = 0
     while os.access(backup_file, os.R_OK):
-        backup_file += str(i)
+        backup_file = config_file + ".bak" + str(i)
         i += 1
     cp(config_file, backup_file)
     logger.debug("Copied conf to %s", backup_file)
@@ -110,49 +107,68 @@ def update_dotbot_conf(config_file, added_files):
         cp(backup_file, config_file)
         logger.debug("Restored backup file %s", backup_file)
     finally:
-        os.remove(backup_file)
-        logger.debug("Removed backup file %s", backup_file)
+        if remove_backup:
+            os.remove(backup_file)
+            logger.debug("Removed backup file %s", backup_file)
 
 
-def parse_args(defaults):
-    """
-    Parse CLI args, if any
-    """
-    from argparse import ArgumentParser
-    parser = ArgumentParser()
-    parser.add_argument('directories', nargs='*', default=defaults['repo_root'], metavar='directory',
-        help="Directories to restrict the update to (default: entire repository)")
-    parser.add_argument('-c', '--config-file', nargs=1, default=[defaults['dotbot_conf']], metavar='file', dest='config_file',
-        help="Alternate location of config file (default: '{}')".format(defaults['dotbot_conf']))
-    parser.add_argument('-d', '--debug', dest='debug', action='store_true')
-
-    args = parser.parse_args()
-    if args.debug:
-        logger.setLevel(logging.DEBUG)
-    config_file = args.config_file[0]
-    logger.debug("Using config file %s", config_file)
-    directories = args.directories
-    logger.debug("Looking in directories %s", directories)
-    return config_file, directories
-
+# def parse_args(options):
+#     """
+#     Parse CLI args, if any
+#     """
+#     from argparse import ArgumentParser
+#     parser = ArgumentParser()
+#     parser.add_argument('directories', nargs='*', default=options['repo_root'], metavar='directory',
+#         help="Directories to restrict the update to (default: entire repository)")
+#     parser.add_argument('-c', '--config-file', nargs=1, default=[options['dotbot_conf']], metavar='file', dest='config_file',
+#         help="Alternate location of config file (default: '{}')".format(options['dotbot_conf']))
+#     parser.add_argument('-d', '--debug', dest='debug', action='store_true')
+#
+#     args = parser.parse_args()
+#     if args.debug:
+#         logger.setLevel(logging.DEBUG)
+#     config_file = args.config_file[0]
+#     directories = args.directories
+#     return config_file, directories
+#
 
 def main():
-    defaults = {}
-    defaults['repo_root'] = os.getenv('REPO_ROOT', ".")
-    defaults['dotbot_conf'] = os.getenv('DOTBOT_CONF', "dotbot.conf.yaml")
+    options = {}
 
-    config_file, directories = parse_args(defaults)
+    options['debug'] = bool(os.getenv('AUTOBOT_DEBUG', ""))
+    if options['debug']:
+        logger.setLevel(logging.DEBUG)
 
-    repo = Repository(defaults['repo_root'])
+    options['disabled'] = bool(os.getenv('AUTOBOT_DISABLED', ""))
+    if options['disabled']:
+        logger.debug("Disabled, no action taken")
+        sys.exit()
 
-    added_files = get_added_files(repo, directories)
+    options['repo_root'] = os.getenv('AUTOBOT_REPO_ROOT', ".")
+    logger.debug("AUTOBOT_REPO_ROOT='%s'", options['repo_root'])
+
+    options['dotbot_conf'] = os.getenv('AUTOBOT_DOTBOT_CONF', "dotbot.conf.yaml")
+    logger.debug("AUTOBOT_DOTBOT_CONF='%s'", options['dotbot_conf'])
+
+    options['includes'] = os.getenv('AUTOBOT_INCLUDE', options['repo_root']).split(":")
+    logger.debug("AUTOBOT_INCLUDE=%s", options['includes'])
+
+    options['excludes'] = os.getenv('AUTOBOT_EXCLUDE', "").split(":")
+    logger.debug("AUTOBOT_EXCLUDE=directories %s", options['excludes'])
+
+    options['remove_backup'] = os.getenv('AUTOBOT_DELETE_BACKUP', "")
+    logger.debug("AUTOBOT_DELETE_BACKUP=%s", bool(options['remove_backup']))
+
+    repo = Repository(options['repo_root'])
+
+    added_files = get_added_files(repo, options['includes'], options['excludes'])
     if added_files:
-        while config_file in added_files:
+        while options['dotbot_conf'] in added_files:
             # don't add a link for the config file itself!
-            added_files.remove(config_file)
+            added_files.remove(options['dotbot_conf'])
         logger.debug("Updating %s", added_files)
-        update_dotbot_conf(config_file, added_files)
-        repo.index.add(config_file)
+        update_dotbot_conf(options['dotbot_conf'], added_files, options['remove_backup'])
+        repo.index.add(options['dotbot_conf'])
         repo.index.write()
     else:
         logger.debug("Nothing to update")
