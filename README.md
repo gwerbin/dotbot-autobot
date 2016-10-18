@@ -3,6 +3,15 @@
 - A Dotbot configuration file in that repository
 - Python 3
 
+#### Dependencies installation
+
+##### Debian Jessie
+
+On Debian Jessie, run the following commands:
+
+    # apt-get install libgit2-dev python3-cffi python3-yaml
+    # pip3 install -r requirements.txt
+
 
 ### Instructions
 Save `pre-commit` and `prepare-commit-msg` to `.git/hooks` in your dotfiles directory. Alternatively, use a Git hook manager like [git-hooks](https://github.com/git-hooks/git-hooks).
