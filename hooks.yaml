@@ -1,0 +1,5 @@
+-   id: autobot
+    name: Autobot
+    entry: pre-commit
+    language: python
+    description: Automatically update your Dotbot config file when you add files in Git
