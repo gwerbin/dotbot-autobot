@@ -147,7 +147,7 @@ def main():
     options['repo_root'] = os.getenv('AUTOBOT_REPO_ROOT', ".")
     logger.debug("AUTOBOT_REPO_ROOT='%s'", options['repo_root'])
 
-    options['dotbot_conf'] = os.getenv('AUTOBOT_DOTBOT_CONF', "dotbot.conf.yaml")
+    options['dotbot_conf'] = os.getenv('AUTOBOT_DOTBOT_CONF', "install.conf.yaml")
     logger.debug("AUTOBOT_DOTBOT_CONF='%s'", options['dotbot_conf'])
 
     options['includes'] = os.getenv('AUTOBOT_INCLUDE', options['repo_root']).split(":")
